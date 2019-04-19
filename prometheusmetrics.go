@@ -56,6 +56,7 @@ func (c *PrometheusConfig) gaugeFromNameAndValue(name string, val float64) {
 	}
 	g.Set(val)
 }
+
 func (c *PrometheusConfig) UpdatePrometheusMetrics() {
 	for _ = range time.Tick(c.FlushInterval) {
 		c.UpdatePrometheusMetricsOnce()
@@ -78,11 +79,21 @@ func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 				c.gaugeFromNameAndValue(name, float64(lastSample))
 			}
 		case metrics.Meter:
-			lastSample := metric.Snapshot().Rate1()
-			c.gaugeFromNameAndValue(name, float64(lastSample))
+			s := metric.Snapshot()
+			c.gaugeFromNameAndValue(name, float64(s.Rate1()))
+			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "mean"), float64(s.RateMean()))
+
 		case metrics.Timer:
-			lastSample := metric.Snapshot().Rate1()
-			c.gaugeFromNameAndValue(name, float64(lastSample))
+			s := metric.Snapshot()
+			c.gaugeFromNameAndValue(name, float64(s.Rate1()))
+
+			ps := s.Percentiles([]float64{0.95, 0.99, 0.999})
+			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "mean"), float64(time.Duration(s.Mean())))
+			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "min"), float64(s.Min()))
+			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "max"), float64(s.Max()))
+			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p95"), float64(time.Duration(ps[0])))
+			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p99"), float64(time.Duration(ps[1])))
+			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p999"), float64(time.Duration(ps[2])))
 		}
 	})
 	return nil
