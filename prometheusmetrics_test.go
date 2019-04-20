@@ -114,3 +114,25 @@ func TestPrometheusMeterGetUpdated(t *testing.T) {
 		t.Fatalf("Go-metrics value and prometheus metrics value do not match")
 	}
 }
+
+func TestPrometheusTimerGetUpdated(t *testing.T) {
+	prometheusRegistry := prometheus.NewRegistry()
+	metricsRegistry := metrics.NewRegistry()
+	pClient := NewPrometheusProvider(metricsRegistry, "test", "subsys", prometheusRegistry, 1*time.Second)
+	gm := metrics.NewTimer()
+	metricsRegistry.Register("timer", gm)
+	gm.Time(func() {
+		time.Sleep(time.Second)
+	})
+	go pClient.UpdatePrometheusMetrics()
+	time.Sleep(5 * time.Second)
+	metrics, _ := prometheusRegistry.Gather()
+	if len(metrics) == 0 {
+		t.Fatalf("prometheus was unable to register the metric")
+	}
+	serialized := fmt.Sprint(metrics[0])
+	expected := fmt.Sprintf("name:\"test_subsys_timer\" help:\"timer\" type:GAUGE metric:<gauge:<value:%.1f > > ", gm.Rate1())
+	if serialized != expected {
+		t.Fatalf("%s : %s", serialized, expected)
+	}
+}
