@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rcrowley/go-metrics"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -121,18 +123,73 @@ func TestPrometheusTimerGetUpdated(t *testing.T) {
 	pClient := NewPrometheusProvider(metricsRegistry, "test", "subsys", prometheusRegistry, 1*time.Second)
 	gm := metrics.NewTimer()
 	metricsRegistry.Register("timer", gm)
-	gm.Time(func() {
-		time.Sleep(time.Second)
-	})
+
+	for ii := 0; ii < 94; ii++ {
+		gm.Time(func() {time.Sleep(time.Millisecond)})
+	}
+	for ii := 0; ii < 5; ii++ {
+		gm.Time(func() {time.Sleep(time.Millisecond * 5)})
+	}
+	gm.Time(func() {time.Sleep(time.Millisecond * 10)})
+
 	go pClient.UpdatePrometheusMetrics()
 	time.Sleep(5 * time.Second)
 	metrics, _ := prometheusRegistry.Gather()
 	if len(metrics) == 0 {
 		t.Fatalf("prometheus was unable to register the metric")
 	}
+
 	serialized := fmt.Sprint(metrics[0])
-	expected := fmt.Sprintf("name:\"test_subsys_timer\" help:\"timer\" type:GAUGE metric:<gauge:<value:%.1f > > ", gm.Rate1())
-	if serialized != expected {
-		t.Fatalf("%s : %s", serialized, expected)
+	expected := "name:\"test_subsys_timer\" help:\"timer\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, gm.Rate1()) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for rate1 do not match:\n+ %s\n- %s", serialized, expected)
 	}
+
+	serialized = fmt.Sprint(metrics[1])
+	expected = "name:\"test_subsys_timer_max\" help:\"timer_max\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, float64(gm.Max())) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for max do not match:\n+ %s\n- %s", serialized, expected)
+	}
+
+	serialized = fmt.Sprint(metrics[2])
+	expected = "name:\"test_subsys_timer_mean\" help:\"timer_mean\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, gm.Mean()) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for mean do not match:\n+ %s\n- %s", serialized, expected)
+	}
+
+	serialized = fmt.Sprint(metrics[3])
+	expected = "name:\"test_subsys_timer_min\" help:\"timer_min\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, float64(gm.Min())) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for min do not match:\n+ %s\n- %s", serialized, expected)
+	}
+
+	serialized = fmt.Sprint(metrics[4])
+	expected = "name:\"test_subsys_timer_p95\" help:\"timer_p95\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, gm.Percentile(0.95)) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for p95 do not match:\n+ %s\n- %s", serialized, expected)
+	}
+
+	serialized = fmt.Sprint(metrics[5])
+	expected = "name:\"test_subsys_timer_p99\" help:\"timer_p99\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, gm.Percentile(0.99)) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for p99 do not match:\n+ %s\n- %s", serialized, expected)
+	}
+
+	serialized = fmt.Sprint(metrics[6])
+	expected = "name:\"test_subsys_timer_p999\" help:\"timer_p999\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, gm.Percentile(0.999)) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for p99 do not match:\n+ %s\n- %s", serialized, expected)
+	}
+}
+
+func checkMetricText(serialized, expectedText string, expectedValue float64) bool {
+	s := strings.Split(serialized, "value:")
+	s2 := strings.Split(s[1], ">")
+	serializedValue, _ := strconv.ParseFloat(strings.TrimSpace(s2[0]), 64)
+
+	return numberInRange(serializedValue, expectedValue - 1, expectedValue + 1) && s[0] == expectedText
+}
+
+func numberInRange(n, min, max float64) bool {
+	return n >= min && n <= max
 }
