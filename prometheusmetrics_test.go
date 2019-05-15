@@ -117,6 +117,69 @@ func TestPrometheusMeterGetUpdated(t *testing.T) {
 	}
 }
 
+func TestPrometheusHistogramGetUpdated(t *testing.T) {
+	prometheusRegistry := prometheus.NewRegistry()
+	metricsRegistry := metrics.NewRegistry()
+	pClient := NewPrometheusProvider(metricsRegistry, "test", "subsys", prometheusRegistry, 1*time.Second)
+	// values := make([]int64, 0)
+	//sample := metrics.HistogramSnapshot{metrics.NewSampleSnapshot(int64(len(values)), values)}
+	gm := metrics.NewHistogram(metrics.NewUniformSample(1028))
+	metricsRegistry.Register("histogram", gm)
+
+	for ii := 0; ii < 94; ii++ {
+		gm.Update(1)
+	}
+	for ii := 0; ii < 5; ii++ {
+		gm.Update(5)
+	}
+	gm.Update(10)
+
+	go pClient.UpdatePrometheusMetrics()
+	time.Sleep(5 * time.Second)
+	metrics, _ := prometheusRegistry.Gather()
+	if len(metrics) == 0 {
+		t.Fatalf("prometheus was unable to register the metric")
+	}
+
+	serialized := fmt.Sprint(metrics[0])
+	
+	serialized = fmt.Sprint(metrics[1])
+	expected := "name:\"test_subsys_histogram_max\" help:\"histogram_max\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, float64(gm.Max())) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for max do not match:\n+ %s\n- %s", serialized, expected)
+	}
+
+	serialized = fmt.Sprint(metrics[2])
+	expected = "name:\"test_subsys_histogram_mean\" help:\"histogram_mean\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, gm.Mean()) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for mean do not match:\n+ %s\n- %s", serialized, expected)
+	}
+
+	serialized = fmt.Sprint(metrics[3])
+	expected = "name:\"test_subsys_histogram_min\" help:\"histogram_min\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, float64(gm.Min())) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for min do not match:\n+ %s\n- %s", serialized, expected)
+	}
+
+	serialized = fmt.Sprint(metrics[4])
+	expected = "name:\"test_subsys_histogram_p95\" help:\"histogram_p95\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, gm.Percentile(0.95)) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for p95 do not match:\n+ %s\n- %s", serialized, expected)
+	}
+
+	serialized = fmt.Sprint(metrics[5])
+	expected = "name:\"test_subsys_histogram_p99\" help:\"histogram_p99\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, gm.Percentile(0.99)) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for p99 do not match:\n+ %s\n- %s", serialized, expected)
+	}
+
+	serialized = fmt.Sprint(metrics[6])
+	expected = "name:\"test_subsys_histogram_p999\" help:\"histogram_p999\" type:GAUGE metric:<gauge:<value"
+	if checkMetricText(serialized, expected, gm.Percentile(0.999)) {
+		t.Fatalf("Go-metrics value and prometheus metrics value for p99 do not match:\n+ %s\n- %s", serialized, expected)
+	}
+}
+
 func TestPrometheusTimerGetUpdated(t *testing.T) {
 	prometheusRegistry := prometheus.NewRegistry()
 	metricsRegistry := metrics.NewRegistry()
