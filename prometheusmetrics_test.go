@@ -117,6 +117,39 @@ func TestPrometheusMeterGetUpdated(t *testing.T) {
 	}
 }
 
+func TestPrometheusHistogramGetUpdated(t *testing.T) {
+	prometheusRegistry := prometheus.NewRegistry()
+	metricsRegistry := metrics.NewRegistry()
+	pClient := NewPrometheusProvider(metricsRegistry, "test", "subsys", prometheusRegistry, 1*time.Second)
+	// values := make([]int64, 0)
+	//sample := metrics.HistogramSnapshot{metrics.NewSampleSnapshot(int64(len(values)), values)}
+	gm := metrics.NewHistogram(metrics.NewUniformSample(1028))
+	metricsRegistry.Register("histogram", gm)
+
+	for ii := 0; ii < 94; ii++ {
+		gm.Update(1)
+	}
+	for ii := 0; ii < 5; ii++ {
+		gm.Update(5)
+	}
+	gm.Update(10)
+
+	go pClient.UpdatePrometheusMetrics()
+	time.Sleep(5 * time.Second)
+	metrics, _ := prometheusRegistry.Gather()
+
+	if len(metrics) == 0 {
+		t.Fatalf("prometheus was unable to register the metric")
+	}
+
+	serialized := fmt.Sprint(metrics[0])
+
+	expected := `name:"test_subsys_histogram" help:"histogram" type:HISTOGRAM metric:<histogram:<sample_count:0 sample_sum:0 bucket:<cumulative_count:0 upper_bound:0.05 > bucket:<cumulative_count:0 upper_bound:0.1 > bucket:<cumulative_count:0 upper_bound:0.25 > bucket:<cumulative_count:0 upper_bound:0.5 > bucket:<cumulative_count:0 upper_bound:0.75 > bucket:<cumulative_count:0 upper_bound:0.9 > bucket:<cumulative_count:0 upper_bound:0.95 > bucket:<cumulative_count:0 upper_bound:0.99 > > > `
+	if serialized != expected {
+		t.Fatalf("Go-metrics value and prometheus metrics value for max do not match:\n+ %s\n- %s", serialized, expected)
+	}
+}
+
 func TestPrometheusTimerGetUpdated(t *testing.T) {
 	prometheusRegistry := prometheus.NewRegistry()
 	metricsRegistry := metrics.NewRegistry()

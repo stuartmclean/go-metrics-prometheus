@@ -18,6 +18,8 @@ type PrometheusConfig struct {
 	promRegistry  prometheus.Registerer //Prometheus registry
 	FlushInterval time.Duration         //interval to update prom metrics
 	gauges        map[string]prometheus.Gauge
+	histograms    map[string]prometheus.Histogram
+	histChannels  map[string]chan prometheus.Metric
 }
 
 // NewPrometheusProvider returns a Provider that produces Prometheus metrics.
@@ -30,6 +32,8 @@ func NewPrometheusProvider(r metrics.Registry, namespace string, subsystem strin
 		promRegistry:  promRegistry,
 		FlushInterval: FlushInterval,
 		gauges:        make(map[string]prometheus.Gauge),
+		histograms:    make(map[string]prometheus.Histogram),
+		histChannels:  make(map[string]chan prometheus.Metric),
 	}
 }
 
@@ -57,6 +61,52 @@ func (c *PrometheusConfig) gaugeFromNameAndValue(name string, val float64) {
 	g.Set(val)
 }
 
+func (c *PrometheusConfig) outputPrometheusHistogram(name string, metric metrics.Histogram) {
+	key := fmt.Sprintf("%s_%s_%s", c.namespace, c.subsystem, name)
+	ch, ok := c.histChannels[key]
+	if !ok {
+		ch = make(chan prometheus.Metric)
+
+	}
+
+	buckets := []float64{0.05, 0.1, 0.25, 0.50, 0.75, 0.9, 0.95, 0.99}
+
+	h, ok := c.histograms[key]
+	if !ok {
+		h = prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: c.flattenKey(c.namespace),
+			Subsystem: c.flattenKey(c.subsystem),
+			Name: c.flattenKey(name),
+			Help: name,
+			Buckets: buckets,
+		})
+		c.promRegistry.MustRegister(h)
+		c.histograms[key] = h
+		go h.Collect(ch)
+	}
+
+	snapshot := metric.Snapshot()
+	ps := snapshot.Percentiles(buckets)
+
+	bucketVals := map[float64]uint64{
+		0.05: uint64(ps[0]),
+		0.10: uint64(ps[1]),
+		0.25: uint64(ps[2]),
+		0.50: uint64(ps[3]),
+		0.75: uint64(ps[4]),
+		0.90: uint64(ps[5]),
+		0.95: uint64(ps[6]),
+		0.99: uint64(ps[7]),
+	}
+
+	desc := prometheus.NewDesc(key, name, []string{}, map[string]string{})
+	constHistogram, err := prometheus.NewConstHistogram(desc, uint64(snapshot.Count()), float64(snapshot.Sum()), bucketVals)
+
+	if err == nil {
+		ch <- constHistogram
+	}
+}
+
 func (c *PrometheusConfig) UpdatePrometheusMetrics() {
 	for _ = range time.Tick(c.FlushInterval) {
 		c.UpdatePrometheusMetricsOnce()
@@ -73,25 +123,25 @@ func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 		case metrics.GaugeFloat64:
 			c.gaugeFromNameAndValue(name, metric.Value())
 		case metrics.Histogram:
-			snapshot := metric.Snapshot()
-			metric.Count()
-			samples := snapshot.Sample().Values()
-			if len(samples) > 0 {
-				lastSample := samples[len(samples)-1]
-				c.gaugeFromNameAndValue(name, float64(lastSample))
-
-				ps := snapshot.Percentiles([]float64{0.05, 0.10, 0.25, 0.50, 0.75, 0.9, 0.95})
-				c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "mean"), snapshot.Mean())
-				c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "min"), float64(snapshot.Min()))
-				c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "max"), float64(snapshot.Max()))
-				c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p5"), float64(ps[0]))
-				c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p10"), float64(ps[1]))
-				c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p25"), float64(ps[2]))
-				c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p50"), float64(ps[3]))
-				c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p75"), float64(ps[4]))
-				c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p90"), float64(ps[5]))
-				c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p95"), float64(ps[6]))
-			}
+			c.outputPrometheusHistogram(name, metric)
+			//snapshot := metric.Snapshot()
+			//samples := snapshot.Sample().Values()
+			//if len(samples) > 0 {
+			//	lastSample := samples[len(samples)-1]
+			//	c.gaugeFromNameAndValue(name, float64(lastSample))
+			//
+			//	ps := snapshot.Percentiles([]float64{0.05, 0.10, 0.25, 0.50, 0.75, 0.9, 0.95})
+			//	c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "mean"), snapshot.Mean())
+			//	c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "min"), float64(snapshot.Min()))
+			//	c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "max"), float64(snapshot.Max()))
+			//	c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p5"), float64(ps[0]))
+			//	c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p10"), float64(ps[1]))
+			//	c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p25"), float64(ps[2]))
+			//	c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p50"), float64(ps[3]))
+			//	c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p75"), float64(ps[4]))
+			//	c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p90"), float64(ps[5]))
+			//	c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "p95"), float64(ps[6]))
+			//}
 		case metrics.Meter:
 			s := metric.Snapshot()
 			c.gaugeFromNameAndValue(name, s.Rate1())
