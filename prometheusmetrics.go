@@ -18,9 +18,21 @@ type PrometheusConfig struct {
 	promRegistry  prometheus.Registerer //Prometheus registry
 	FlushInterval time.Duration         //interval to update prom metrics
 	gauges        map[string]prometheus.Gauge
-	histograms    map[string]prometheus.Histogram
-	histChannels  map[string]chan prometheus.Metric
+	histograms    map[string]*CustomCollector
 }
+
+type CustomCollector struct {
+	metric prometheus.Metric
+}
+
+func (c *CustomCollector) Collect(ch chan<- prometheus.Metric) {
+	ch <- c.metric
+}
+
+func (p *CustomCollector) Describe(ch chan<- *prometheus.Desc) {
+	prometheus.NewGauge(prometheus.GaugeOpts{Name: "Dummy", Help: "Dummy"}).Describe(ch)
+}
+
 
 // NewPrometheusProvider returns a Provider that produces Prometheus metrics.
 // Namespace and subsystem are applied to all produced metrics.
@@ -32,8 +44,7 @@ func NewPrometheusProvider(r metrics.Registry, namespace string, subsystem strin
 		promRegistry:  promRegistry,
 		FlushInterval: FlushInterval,
 		gauges:        make(map[string]prometheus.Gauge),
-		histograms:    make(map[string]prometheus.Histogram),
-		histChannels:  make(map[string]chan prometheus.Metric),
+		histograms:    make(map[string]*CustomCollector),
 	}
 }
 
@@ -63,26 +74,13 @@ func (c *PrometheusConfig) gaugeFromNameAndValue(name string, val float64) {
 
 func (c *PrometheusConfig) outputPrometheusHistogram(name string, metric metrics.Histogram) {
 	key := fmt.Sprintf("%s_%s_%s", c.namespace, c.subsystem, name)
-	ch, ok := c.histChannels[key]
-	if !ok {
-		ch = make(chan prometheus.Metric)
-
-	}
-
 	buckets := []float64{0.05, 0.1, 0.25, 0.50, 0.75, 0.9, 0.95, 0.99}
 
 	h, ok := c.histograms[key]
 	if !ok {
-		h = prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: c.flattenKey(c.namespace),
-			Subsystem: c.flattenKey(c.subsystem),
-			Name: c.flattenKey(name),
-			Help: name,
-			Buckets: buckets,
-		})
+		h = &CustomCollector{}
 		c.promRegistry.MustRegister(h)
 		c.histograms[key] = h
-		go h.Collect(ch)
 	}
 
 	snapshot := metric.Snapshot()
@@ -103,7 +101,7 @@ func (c *PrometheusConfig) outputPrometheusHistogram(name string, metric metrics
 	constHistogram, err := prometheus.NewConstHistogram(desc, uint64(snapshot.Count()), float64(snapshot.Sum()), bucketVals)
 
 	if err == nil {
-		ch <- constHistogram
+		h.metric = constHistogram
 	}
 }
 
