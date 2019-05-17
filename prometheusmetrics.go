@@ -19,6 +19,7 @@ type PrometheusConfig struct {
 	FlushInterval time.Duration         //interval to update prom metrics
 	gauges        map[string]prometheus.Gauge
 	histograms    map[string]*CustomCollector
+	timers        map[string]*CustomCollector
 }
 
 type CustomCollector struct {
@@ -72,9 +73,66 @@ func (c *PrometheusConfig) gaugeFromNameAndValue(name string, val float64) {
 	g.Set(val)
 }
 
-func (c *PrometheusConfig) outputPrometheusHistogram(name string, metric metrics.Histogram) {
+func (c *PrometheusConfig) outputPrometheusHistogram(name string, i interface{}, buckets []float64) {
 	key := fmt.Sprintf("%s_%s_%s", c.namespace, c.subsystem, name)
-	buckets := []float64{0.05, 0.1, 0.25, 0.50, 0.75, 0.9, 0.95, 0.99}
+
+	h, ok := c.histograms[key]
+	if !ok {
+		h = &CustomCollector{}
+		c.promRegistry.MustRegister(h)
+		c.histograms[key] = h
+	}
+
+	var ps []float64
+	var count uint64
+	var sum float64
+
+	switch metric := i.(type) {
+	case metrics.Histogram:
+		snapshot := metric.Snapshot()
+		ps = snapshot.Percentiles(buckets)
+		count = uint64(snapshot.Count())
+		sum = float64(snapshot.Sum())
+	case metrics.Timer:
+		snapshot := metric.Snapshot()
+		ps = snapshot.Percentiles(buckets)
+		count = uint64(snapshot.Count())
+		sum = float64(snapshot.Sum())
+	default:
+		return
+	}
+
+	bucketVals := make(map[float64]uint64)
+
+	for ii, bucket := range buckets {
+		bucketVals[bucket] = uint64(ps[ii])
+	}
+
+	desc := prometheus.NewDesc(
+		prometheus.BuildFQName(
+			c.flattenKey(c.namespace),
+			c.flattenKey(c.subsystem),
+			c.flattenKey(name),
+		),
+		name,
+		[]string{},
+		map[string]string{},
+	)
+
+	constHistogram, err := prometheus.NewConstHistogram(
+		desc,
+		count,
+		sum,
+		bucketVals,
+	)
+
+	if err == nil {
+		h.metric = constHistogram
+	}
+}
+
+func (c *PrometheusConfig) outputPrometheusTimer(name string, metric metrics.Timer, buckets []float64) {
+	key := fmt.Sprintf("%s_%s_%s", c.namespace, c.subsystem, name)
 
 	h, ok := c.histograms[key]
 	if !ok {
@@ -86,15 +144,10 @@ func (c *PrometheusConfig) outputPrometheusHistogram(name string, metric metrics
 	snapshot := metric.Snapshot()
 	ps := snapshot.Percentiles(buckets)
 
-	bucketVals := map[float64]uint64{
-		0.05: uint64(ps[0]),
-		0.10: uint64(ps[1]),
-		0.25: uint64(ps[2]),
-		0.50: uint64(ps[3]),
-		0.75: uint64(ps[4]),
-		0.90: uint64(ps[5]),
-		0.95: uint64(ps[6]),
-		0.99: uint64(ps[7]),
+	bucketVals := make(map[float64]uint64)
+
+	for ii, bucket := range buckets {
+		bucketVals[bucket] = uint64(ps[ii])
 	}
 
 	desc := prometheus.NewDesc(
@@ -136,13 +189,8 @@ func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 		case metrics.GaugeFloat64:
 			c.gaugeFromNameAndValue(name, metric.Value())
 		case metrics.Histogram:
-			samples := metric.Snapshot().Sample().Values()
-			if len(samples) > 0 {
-				lastSample := samples[len(samples)-1]
-				c.gaugeFromNameAndValue(name, float64(lastSample))
-			}
-
-			c.outputPrometheusHistogram(name, metric)
+			buckets := []float64{0.05, 0.1, 0.25, 0.50, 0.75, 0.9, 0.95, 0.99}
+			c.outputPrometheusHistogram(name, metric, buckets)
 		case metrics.Meter:
 			s := metric.Snapshot()
 			c.gaugeFromNameAndValue(name, s.Rate1())
@@ -152,6 +200,8 @@ func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 			s := metric.Snapshot()
 			c.gaugeFromNameAndValue(name, s.Rate1())
 
+			buckets := []float64{0.95, 0.99, 0.999}
+			c.outputPrometheusHistogram(name, metric, buckets)
 			ps := s.Percentiles([]float64{0.95, 0.99, 0.999})
 			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "mean"), s.Mean())
 			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "min"), float64(s.Min()))
