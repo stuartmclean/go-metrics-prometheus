@@ -97,8 +97,23 @@ func (c *PrometheusConfig) outputPrometheusHistogram(name string, metric metrics
 		0.99: uint64(ps[7]),
 	}
 
-	desc := prometheus.NewDesc(key, name, []string{}, map[string]string{})
-	constHistogram, err := prometheus.NewConstHistogram(desc, uint64(snapshot.Count()), float64(snapshot.Sum()), bucketVals)
+	desc := prometheus.NewDesc(
+		prometheus.BuildFQName(
+			c.flattenKey(c.namespace),
+			c.flattenKey(c.subsystem),
+			c.flattenKey(name),
+		),
+		name,
+		[]string{},
+		map[string]string{},
+	)
+
+	constHistogram, err := prometheus.NewConstHistogram(
+		desc,
+		uint64(snapshot.Count()),
+		float64(snapshot.Sum()),
+		bucketVals,
+	)
 
 	if err == nil {
 		h.metric = constHistogram
