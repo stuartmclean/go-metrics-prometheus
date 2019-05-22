@@ -12,13 +12,15 @@ import (
 // Prometheus Exporter
 
 type PrometheusConfig struct {
-	namespace     string
-	Registry      metrics.Registry // Registry to be exported
-	subsystem     string
-	promRegistry  prometheus.Registerer //Prometheus registry
-	FlushInterval time.Duration         //interval to update prom metrics
-	gauges        map[string]prometheus.Gauge
-	histograms    map[string]*CustomCollector
+	namespace        string
+	Registry         metrics.Registry // Registry to be exported
+	subsystem        string
+	promRegistry     prometheus.Registerer //Prometheus registry
+	FlushInterval    time.Duration         //interval to update prom metrics
+	gauges           map[string]prometheus.Gauge
+	histograms       map[string]*CustomCollector
+	histogramBuckets []float64
+	timerBuckets     []float64
 }
 
 type CustomCollector struct {
@@ -39,14 +41,24 @@ func (p *CustomCollector) Describe(ch chan<- *prometheus.Desc) {
 // Namespace and subsystem are applied to all produced metrics.
 func NewPrometheusProvider(r metrics.Registry, namespace string, subsystem string, promRegistry prometheus.Registerer, FlushInterval time.Duration) *PrometheusConfig {
 	return &PrometheusConfig{
-		namespace:     namespace,
-		subsystem:     subsystem,
-		Registry:      r,
-		promRegistry:  promRegistry,
-		FlushInterval: FlushInterval,
-		gauges:        make(map[string]prometheus.Gauge),
-		histograms:    make(map[string]*CustomCollector),
+		namespace:        namespace,
+		subsystem:        subsystem,
+		Registry:         r,
+		promRegistry:     promRegistry,
+		FlushInterval:    FlushInterval,
+		gauges:           make(map[string]prometheus.Gauge),
+		histograms:       make(map[string]*CustomCollector),
+		histogramBuckets: []float64{0.05, 0.1, 0.25, 0.50, 0.75, 0.9, 0.95, 0.99},
+		timerBuckets:     []float64{0.50, 0.95, 0.99, 0.999},
 	}
+}
+
+func (c *PrometheusConfig) SetHistogramBuckets(b []float64) {
+	c.histogramBuckets = b
+}
+
+func (c *PrometheusConfig) SetTimerBuckets(b []float64) {
+	c.timerBuckets = b
 }
 
 func (c *PrometheusConfig) flattenKey(key string) string {
@@ -154,8 +166,7 @@ func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 		case metrics.GaugeFloat64:
 			c.gaugeFromNameAndValue(name, metric.Value())
 		case metrics.Histogram:
-			buckets := []float64{0.05, 0.1, 0.25, 0.50, 0.75, 0.9, 0.95, 0.99}
-			c.histogramFromNameAndMetric(name, metric, buckets)
+			c.histogramFromNameAndMetric(name, metric, c.histogramBuckets)
 
 			samples := metric.Snapshot().Sample().Values()
 			if len(samples) > 0 {
@@ -167,8 +178,7 @@ func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 			c.gaugeFromNameAndValue(name, s.Rate1())
 			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "mean"), s.RateMean())
 		case metrics.Timer:
-			buckets := []float64{0.50, 0.95, 0.99, 0.999}
-			c.histogramFromNameAndMetric(name, metric, buckets)
+			c.histogramFromNameAndMetric(name, metric, c.timerBuckets)
 
 			lastSample := metric.Snapshot().Rate1()
 			c.gaugeFromNameAndValue(name, float64(lastSample))
