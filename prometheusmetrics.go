@@ -32,7 +32,7 @@ func (c *CustomCollector) Collect(ch chan<- prometheus.Metric) {
 }
 
 func (p *CustomCollector) Describe(ch chan<- *prometheus.Desc) {
-	prometheus.NewGauge(prometheus.GaugeOpts{Name: "Dummy", Help: "Dummy"}).Describe(ch)
+	// empty method to fulfill prometheus.Collector interface
 }
 
 // NewPrometheusProvider returns a Provider that produces Prometheus metrics.
@@ -57,8 +57,12 @@ func (c *PrometheusConfig) flattenKey(key string) string {
 	return key
 }
 
+func (c *PrometheusConfig) createKey(name string) string {
+	return fmt.Sprintf("%s_%s_%s", c.namespace, c.subsystem, name)
+}
+
 func (c *PrometheusConfig) gaugeFromNameAndValue(name string, val float64) {
-	key := fmt.Sprintf("%s_%s_%s", c.namespace, c.subsystem, name)
+	key := c.createKey(name)
 	g, ok := c.gauges[key]
 	if !ok {
 		g = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -73,8 +77,8 @@ func (c *PrometheusConfig) gaugeFromNameAndValue(name string, val float64) {
 	g.Set(val)
 }
 
-func (c *PrometheusConfig) outputPrometheusHistogram(name string, i interface{}, buckets []float64) {
-	key := fmt.Sprintf("%s_%s_%s", c.namespace, c.subsystem, name)
+func (c *PrometheusConfig) histogramFromNameAndMetric(name string, i interface{}, buckets []float64) {
+	key := c.createKey(name)
 
 	h, ok := c.histograms[key]
 	if !ok {
@@ -86,6 +90,7 @@ func (c *PrometheusConfig) outputPrometheusHistogram(name string, i interface{},
 	var ps []float64
 	var count uint64
 	var sum float64
+	var constLabels = make(map[string]string)
 
 	switch metric := i.(type) {
 	case metrics.Histogram:
@@ -93,13 +98,15 @@ func (c *PrometheusConfig) outputPrometheusHistogram(name string, i interface{},
 		ps = snapshot.Percentiles(buckets)
 		count = uint64(snapshot.Count())
 		sum = float64(snapshot.Sum())
+		constLabels["hist_type"] = "histogram"
 	case metrics.Timer:
 		snapshot := metric.Snapshot()
 		ps = snapshot.Percentiles(buckets)
 		count = uint64(snapshot.Count())
 		sum = float64(snapshot.Sum())
+		constLabels["hist_type"] = "timer"
 	default:
-		panic("unexpected metric type")
+		panic(fmt.Sprintf("unexpected metric type %T", i))
 	}
 
 	bucketVals := make(map[float64]uint64)
@@ -116,7 +123,7 @@ func (c *PrometheusConfig) outputPrometheusHistogram(name string, i interface{},
 		),
 		name,
 		[]string{},
-		map[string]string{},
+		constLabels,
 	)
 
 	constHistogram, err := prometheus.NewConstHistogram(
@@ -148,14 +155,23 @@ func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 			c.gaugeFromNameAndValue(name, metric.Value())
 		case metrics.Histogram:
 			buckets := []float64{0.05, 0.1, 0.25, 0.50, 0.75, 0.9, 0.95, 0.99}
-			c.outputPrometheusHistogram(name, metric, buckets)
+			c.histogramFromNameAndMetric(name, metric, buckets)
+
+			samples := metric.Snapshot().Sample().Values()
+			if len(samples) > 0 {
+				lastSample := samples[len(samples)-1]
+				c.gaugeFromNameAndValue(name, float64(lastSample))
+			}
 		case metrics.Meter:
 			s := metric.Snapshot()
 			c.gaugeFromNameAndValue(name, s.Rate1())
 			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "mean"), s.RateMean())
 		case metrics.Timer:
-			buckets := []float64{0.95, 0.99, 0.999}
-			c.outputPrometheusHistogram(name, metric, buckets)
+			buckets := []float64{0.50, 0.95, 0.99, 0.999}
+			c.histogramFromNameAndMetric(name, metric, buckets)
+
+			lastSample := metric.Snapshot().Rate1()
+			c.gaugeFromNameAndValue(name, float64(lastSample))
 		}
 	})
 	return nil
