@@ -89,7 +89,7 @@ func (c *PrometheusConfig) gaugeFromNameAndValue(name string, val float64) {
 	g.Set(val)
 }
 
-func (c *PrometheusConfig) histogramFromNameAndMetric(name string, i interface{}, buckets []float64) {
+func (c *PrometheusConfig) histogramFromNameAndMetric(name string, m interface{}, buckets []float64) {
 	key := c.createKey(name)
 
 	h, ok := c.histograms[key]
@@ -102,23 +102,23 @@ func (c *PrometheusConfig) histogramFromNameAndMetric(name string, i interface{}
 	var ps []float64
 	var count uint64
 	var sum float64
-	var constLabels = make(map[string]string)
+	var typeName string
 
-	switch metric := i.(type) {
+	switch metric := m.(type) {
 	case metrics.Histogram:
 		snapshot := metric.Snapshot()
 		ps = snapshot.Percentiles(buckets)
 		count = uint64(snapshot.Count())
 		sum = float64(snapshot.Sum())
-		constLabels["hist_type"] = "histogram"
+		typeName = "histogram"
 	case metrics.Timer:
 		snapshot := metric.Snapshot()
 		ps = snapshot.Percentiles(buckets)
 		count = uint64(snapshot.Count())
 		sum = float64(snapshot.Sum())
-		constLabels["hist_type"] = "timer"
+		typeName = "timer"
 	default:
-		panic(fmt.Sprintf("unexpected metric type %T", i))
+		panic(fmt.Sprintf("unexpected metric type %T", m))
 	}
 
 	bucketVals := make(map[float64]uint64)
@@ -131,11 +131,11 @@ func (c *PrometheusConfig) histogramFromNameAndMetric(name string, i interface{}
 		prometheus.BuildFQName(
 			c.flattenKey(c.namespace),
 			c.flattenKey(c.subsystem),
-			c.flattenKey(name),
+			fmt.Sprintf("%s_%s", c.flattenKey(name), typeName),
 		),
 		name,
 		[]string{},
-		constLabels,
+		map[string]string{},
 	)
 
 	constHistogram, err := prometheus.NewConstHistogram(
@@ -166,22 +166,22 @@ func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 		case metrics.GaugeFloat64:
 			c.gaugeFromNameAndValue(name, metric.Value())
 		case metrics.Histogram:
-			c.histogramFromNameAndMetric(name, metric, c.histogramBuckets)
-
 			samples := metric.Snapshot().Sample().Values()
 			if len(samples) > 0 {
 				lastSample := samples[len(samples)-1]
 				c.gaugeFromNameAndValue(name, float64(lastSample))
 			}
+
+			c.histogramFromNameAndMetric(name, metric, c.histogramBuckets)
 		case metrics.Meter:
 			s := metric.Snapshot()
 			c.gaugeFromNameAndValue(name, s.Rate1())
 			c.gaugeFromNameAndValue(fmt.Sprintf("%s_%s", name, "mean"), s.RateMean())
 		case metrics.Timer:
-			c.histogramFromNameAndMetric(name, metric, c.timerBuckets)
-
 			lastSample := metric.Snapshot().Rate1()
 			c.gaugeFromNameAndValue(name, float64(lastSample))
+
+			c.histogramFromNameAndMetric(name, metric, c.timerBuckets)
 		}
 	})
 	return nil

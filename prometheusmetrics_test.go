@@ -122,7 +122,7 @@ func TestPrometheusHistogramGetUpdated(t *testing.T) {
 	// values := make([]int64, 0)
 	//sample := metrics.HistogramSnapshot{metrics.NewSampleSnapshot(int64(len(values)), values)}
 	gm := metrics.NewHistogram(metrics.NewUniformSample(1028))
-	metricsRegistry.Register("histogram", gm)
+	metricsRegistry.Register("metric", gm)
 
 	for ii := 0; ii < 94; ii++ {
 		gm.Update(1)
@@ -136,13 +136,13 @@ func TestPrometheusHistogramGetUpdated(t *testing.T) {
 	time.Sleep(5 * time.Second)
 	metrics, _ := prometheusRegistry.Gather()
 
-	if len(metrics) == 0 {
+	if len(metrics) < 2 {
 		t.Fatalf("prometheus was unable to register the metric")
 	}
 
-	serialized := fmt.Sprint(metrics[0])
+	serialized := fmt.Sprint(metrics[1])
 
-	expected := `name:"test_subsys_histogram" help:"histogram" type:HISTOGRAM metric:<label:<name:"hist_type" value:"histogram" > bhistogram:<sample_count:100 sample_sum:129 bucket:<cumulative_count:1 upper_bound:0.05 > bucket:<cumulative_count:1 upper_bound:0.1 > bucket:<cumulative_count:1 upper_bound:0.25 > bucket:<cumulative_count:1 upper_bound:0.5 > bucket:<cumulative_count:1 upper_bound:0.75 > bucket:<cumulative_count:1 upper_bound:0.9 > bucket:<cumulative_count:5 upper_bound:0.95 > bucket:<cumulative_count:9 upper_bound:0.99 > > > `
+	expected := `name:"test_subsys_metric_histogram" help:"metric" type:HISTOGRAM metric:<histogram:<sample_count:100 sample_sum:129 bucket:<cumulative_count:1 upper_bound:0.05 > bucket:<cumulative_count:1 upper_bound:0.1 > bucket:<cumulative_count:1 upper_bound:0.25 > bucket:<cumulative_count:1 upper_bound:0.5 > bucket:<cumulative_count:1 upper_bound:0.75 > bucket:<cumulative_count:1 upper_bound:0.9 > bucket:<cumulative_count:5 upper_bound:0.95 > bucket:<cumulative_count:9 upper_bound:0.99 > > > `
 	if serialized != expected {
 		t.Fatalf("Go-metrics value and prometheus metrics value for max do not match:\n+ %s\n- %s", serialized, expected)
 	}
