@@ -18,7 +18,7 @@ type PrometheusConfig struct {
 	promRegistry     prometheus.Registerer //Prometheus registry
 	FlushInterval    time.Duration         //interval to update prom metrics
 	gauges           map[string]prometheus.Gauge
-	histograms       map[string]*CustomCollector
+	customMetrics    map[string]*CustomCollector
 	histogramBuckets []float64
 	timerBuckets     []float64
 }
@@ -47,7 +47,7 @@ func NewPrometheusProvider(r metrics.Registry, namespace string, subsystem strin
 		promRegistry:     promRegistry,
 		FlushInterval:    FlushInterval,
 		gauges:           make(map[string]prometheus.Gauge),
-		histograms:       make(map[string]*CustomCollector),
+		customMetrics:    make(map[string]*CustomCollector),
 		histogramBuckets: []float64{0.05, 0.1, 0.25, 0.50, 0.75, 0.9, 0.95, 0.99},
 		timerBuckets:     []float64{0.50, 0.95, 0.99, 0.999},
 	}
@@ -89,14 +89,14 @@ func (c *PrometheusConfig) gaugeFromNameAndValue(name string, val float64) {
 	g.Set(val)
 }
 
-func (c *PrometheusConfig) histogramFromNameAndMetric(name string, m interface{}, buckets []float64) {
+func (c *PrometheusConfig) histogramFromNameAndMetric(name string, goMetric interface{}, buckets []float64) {
 	key := c.createKey(name)
 
-	h, ok := c.histograms[key]
+	collector, ok := c.customMetrics[key]
 	if !ok {
-		h = &CustomCollector{}
-		c.promRegistry.MustRegister(h)
-		c.histograms[key] = h
+		collector = &CustomCollector{}
+		c.promRegistry.MustRegister(collector)
+		c.customMetrics[key] = collector
 	}
 
 	var ps []float64
@@ -104,7 +104,7 @@ func (c *PrometheusConfig) histogramFromNameAndMetric(name string, m interface{}
 	var sum float64
 	var typeName string
 
-	switch metric := m.(type) {
+	switch metric := goMetric.(type) {
 	case metrics.Histogram:
 		snapshot := metric.Snapshot()
 		ps = snapshot.Percentiles(buckets)
@@ -118,7 +118,7 @@ func (c *PrometheusConfig) histogramFromNameAndMetric(name string, m interface{}
 		sum = float64(snapshot.Sum())
 		typeName = "timer"
 	default:
-		panic(fmt.Sprintf("unexpected metric type %T", m))
+		panic(fmt.Sprintf("unexpected metric type %T", goMetric))
 	}
 
 	bucketVals := make(map[float64]uint64)
@@ -146,7 +146,7 @@ func (c *PrometheusConfig) histogramFromNameAndMetric(name string, m interface{}
 	)
 
 	if err == nil {
-		h.metric = constHistogram
+		collector.metric = constHistogram
 	}
 }
 
