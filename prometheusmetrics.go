@@ -1,6 +1,7 @@
 package prometheusmetrics
 
 import (
+	"context"
 	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rcrowley/go-metrics"
@@ -154,6 +155,7 @@ func (c *PrometheusConfig) UpdatePrometheusMetrics() {
 
 func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 	c.Registry.Each(func(name string, i interface{}) {
+		ctx, cancel := context.WithCancel(context.Background())
 		ch := make(chan bool, 1)
 
 		go func() {
@@ -181,13 +183,20 @@ func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 
 				c.histogramFromNameAndMetric(name, metric, c.timerBuckets)
 			}
+
 			ch <- true
+
+			select {
+			case <-ctx.Done():
+				log.Printf("WARN: timeout collecting go-metric %s, type %T", name, i)
+				return
+			}
 		}()
 
 		select {
 		case <-ch:
 		case <-time.After(c.timeout):
-			log.Printf("WARN: timeout collecting go-metric %s, type %T", name, i)
+			cancel()
 		}
 	})
 	return nil
