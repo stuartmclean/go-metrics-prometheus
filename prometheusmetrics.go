@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rcrowley/go-metrics"
+	"log"
 	"strings"
 	"time"
 )
@@ -17,6 +18,7 @@ type PrometheusConfig struct {
 	subsystem        string
 	promRegistry     prometheus.Registerer //Prometheus registry
 	FlushInterval    time.Duration         //interval to update prom metrics
+	timeout          time.Duration
 	gauges           map[string]prometheus.Gauge
 	customMetrics    map[string]*CustomCollector
 	histogramBuckets []float64
@@ -32,6 +34,7 @@ func NewPrometheusProvider(r metrics.Registry, namespace string, subsystem strin
 		Registry:         r,
 		promRegistry:     promRegistry,
 		FlushInterval:    FlushInterval,
+		timeout:          100 * time.Millisecond,
 		gauges:           make(map[string]prometheus.Gauge),
 		customMetrics:    make(map[string]*CustomCollector),
 		histogramBuckets: []float64{0.05, 0.1, 0.25, 0.50, 0.75, 0.9, 0.95, 0.99},
@@ -46,6 +49,11 @@ func (c *PrometheusConfig) WithHistogramBuckets(b []float64) *PrometheusConfig {
 
 func (c *PrometheusConfig) WithTimerBuckets(b []float64) *PrometheusConfig {
 	c.timerBuckets = b
+	return c
+}
+
+func (c *PrometheusConfig) WithTimeout(t time.Duration) *PrometheusConfig {
+	c.timeout = t
 	return c
 }
 
@@ -146,29 +154,40 @@ func (c *PrometheusConfig) UpdatePrometheusMetrics() {
 
 func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
 	c.Registry.Each(func(name string, i interface{}) {
-		switch metric := i.(type) {
-		case metrics.Counter:
-			c.gaugeFromNameAndValue(name, float64(metric.Count()))
-		case metrics.Gauge:
-			c.gaugeFromNameAndValue(name, float64(metric.Value()))
-		case metrics.GaugeFloat64:
-			c.gaugeFromNameAndValue(name, float64(metric.Value()))
-		case metrics.Histogram:
-			samples := metric.Snapshot().Sample().Values()
-			if len(samples) > 0 {
-				lastSample := samples[len(samples)-1]
+		ch := make(chan bool, 1)
+
+		go func() {
+			switch metric := i.(type) {
+			case metrics.Counter:
+				c.gaugeFromNameAndValue(name, float64(metric.Count()))
+			case metrics.Gauge:
+				c.gaugeFromNameAndValue(name, float64(metric.Value()))
+			case metrics.GaugeFloat64:
+				c.gaugeFromNameAndValue(name, float64(metric.Value()))
+			case metrics.Histogram:
+				samples := metric.Snapshot().Sample().Values()
+				if len(samples) > 0 {
+					lastSample := samples[len(samples)-1]
+					c.gaugeFromNameAndValue(name, float64(lastSample))
+				}
+
+				c.histogramFromNameAndMetric(name, metric, c.histogramBuckets)
+			case metrics.Meter:
+				lastSample := metric.Snapshot().Rate1()
 				c.gaugeFromNameAndValue(name, float64(lastSample))
+			case metrics.Timer:
+				lastSample := metric.Snapshot().Rate1()
+				c.gaugeFromNameAndValue(name, float64(lastSample))
+
+				c.histogramFromNameAndMetric(name, metric, c.timerBuckets)
 			}
+			ch <- true
+		}()
 
-			c.histogramFromNameAndMetric(name, metric, c.histogramBuckets)
-		case metrics.Meter:
-			lastSample := metric.Snapshot().Rate1()
-			c.gaugeFromNameAndValue(name, float64(lastSample))
-		case metrics.Timer:
-			lastSample := metric.Snapshot().Rate1()
-			c.gaugeFromNameAndValue(name, float64(lastSample))
-
-			c.histogramFromNameAndMetric(name, metric, c.timerBuckets)
+		select {
+		case <-ch:
+		case <-time.After(c.timeout):
+			log.Printf("WARN: timeout collecting go-metric %s, type %T", name, i)
 		}
 	})
 	return nil
