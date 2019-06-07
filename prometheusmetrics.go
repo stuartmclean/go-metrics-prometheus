@@ -19,7 +19,7 @@ type PrometheusConfig struct {
 	subsystem        string
 	promRegistry     prometheus.Registerer //Prometheus registry
 	FlushInterval    time.Duration         //interval to update prom metrics
-	timeout          time.Duration
+	timeout          time.Duration         //timeout for fetching single metrics from go-metrics
 	gauges           map[string]prometheus.Gauge
 	customMetrics    map[string]*CustomCollector
 	histogramBuckets []float64
